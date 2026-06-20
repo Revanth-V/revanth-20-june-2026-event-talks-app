@@ -11,6 +11,8 @@ let appState = {
 const refreshBtn = document.getElementById('refresh-button');
 const searchInput = document.getElementById('search-input');
 const clearSearchBtn = document.getElementById('clear-search');
+const themeToggleBtn = document.getElementById('theme-toggle');
+const exportCsvBtn = document.getElementById('export-csv-button');
 const feedContainer = document.getElementById('feed-container');
 const loadingState = document.getElementById('loading-state');
 const errorState = document.getElementById('error-state');
@@ -48,6 +50,7 @@ const toastContainer = document.getElementById('toast-container');
 
 // Initial Setup
 document.addEventListener('DOMContentLoaded', () => {
+    initializeTheme();
     setupEventListeners();
     fetchReleases();
 });
@@ -116,6 +119,12 @@ function setupEventListeners() {
             closeTweetModal();
         }
     });
+    
+    // Theme Toggle click
+    themeToggleBtn.addEventListener('click', toggleTheme);
+    
+    // Export CSV click
+    exportCsvBtn.addEventListener('click', downloadCSV);
 }
 
 // Show clear search button when search query exists
@@ -312,6 +321,12 @@ function renderFeed() {
                     <div class="release-card-header">
                         <span class="tag-badge ${tagClass}">${item.type}</span>
                         <div class="card-actions">
+                            <button class="btn-card-copy" title="Copy plain text to clipboard">
+                                <svg class="copy-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
                             <button class="btn-card-tweet" title="Tweet this update">
                                 <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                                     <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"></path>
@@ -327,10 +342,17 @@ function renderFeed() {
                 // Clicking card triggers selection
                 card.addEventListener('click', (e) => {
                     // Avoid trigger selection when clicking link or buttons inside the card
-                    if (e.target.closest('a') || e.target.closest('.btn-card-tweet')) {
+                    if (e.target.closest('a') || e.target.closest('.btn-card-tweet') || e.target.closest('.btn-card-copy')) {
                         return;
                     }
                     selectUpdate(entry, item, card);
+                });
+                
+                // Clicking direct Copy shortcut
+                const copyBtn = card.querySelector('.btn-card-copy');
+                copyBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    copyToClipboard(item.text, copyBtn);
                 });
                 
                 // Clicking direct Tweet shortcut
@@ -490,4 +512,124 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Copy plain text to clipboard with button indicator feedback
+async function copyToClipboard(text, buttonElement) {
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast('Update text copied to clipboard!');
+        
+        // Swap icon feedback
+        const originalSvg = buttonElement.innerHTML;
+        buttonElement.innerHTML = `
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+        `;
+        buttonElement.classList.add('copied');
+        
+        setTimeout(() => {
+            buttonElement.innerHTML = originalSvg;
+            buttonElement.classList.remove('copied');
+        }, 1500);
+    } catch (err) {
+        console.error('Clipboard copy error:', err);
+        showToast('Failed to copy to clipboard.', 'error');
+    }
+}
+
+// Extract filtered updates based on current search & filter state
+function getFilteredUpdates() {
+    const list = [];
+    appState.releases.forEach(entry => {
+        entry.items.forEach(item => {
+            const matchesFilter = appState.activeFilter === 'all' || 
+                item.type.toLowerCase() === appState.activeFilter.toLowerCase();
+                
+            const matchesSearch = !appState.searchQuery || 
+                item.type.toLowerCase().includes(appState.searchQuery) ||
+                item.text.toLowerCase().includes(appState.searchQuery);
+                
+            if (matchesFilter && matchesSearch) {
+                list.push({
+                    date: entry.date,
+                    type: item.type,
+                    text: item.text,
+                    link: entry.link
+                });
+            }
+        });
+    });
+    return list;
+}
+
+// Format and download current filtered releases as CSV file
+function downloadCSV() {
+    const updates = getFilteredUpdates();
+    if (updates.length === 0) {
+        showToast('No updates to export.', 'error');
+        return;
+    }
+    
+    // Header Row
+    let csvContent = 'Date,Type,Description,Documentation Link\n';
+    
+    updates.forEach(u => {
+        // Sanitize double quotes and clean spacing
+        const cleanText = u.text.replace(/\s+/g, ' ').replace(/"/g, '""').trim();
+        csvContent += `"${u.date}","${u.type}","${cleanText}","${u.link}"\n`;
+    });
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    
+    const cleanDate = new Date().toISOString().slice(0, 10);
+    link.setAttribute('download', `bigquery_release_notes_${cleanDate}.csv`);
+    link.style.visibility = 'hidden';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showToast(`Successfully exported ${updates.length} updates to CSV.`);
+}
+
+// Theme handling (Light / Dark mode toggle overrides)
+function initializeTheme() {
+    const savedTheme = localStorage.getItem('theme');
+    const systemPrefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+    
+    if (savedTheme === 'light' || (!savedTheme && systemPrefersLight)) {
+        document.body.classList.add('light-theme');
+        updateThemeToggleButton(true);
+    } else {
+        document.body.classList.remove('light-theme');
+        updateThemeToggleButton(false);
+    }
+}
+
+function toggleTheme() {
+    const isLightNow = document.body.classList.toggle('light-theme');
+    localStorage.setItem('theme', isLightNow ? 'light' : 'dark');
+    updateThemeToggleButton(isLightNow);
+    showToast(`Swapped to ${isLightNow ? 'light' : 'dark'} theme mode.`);
+}
+
+function updateThemeToggleButton(isLight) {
+    const sunIcon = themeToggleBtn.querySelector('.sun-icon');
+    const moonIcon = themeToggleBtn.querySelector('.moon-icon');
+    
+    if (isLight) {
+        sunIcon.style.display = 'none';
+        moonIcon.style.display = 'block';
+        themeToggleBtn.title = 'Switch to dark theme';
+    } else {
+        sunIcon.style.display = 'block';
+        moonIcon.style.display = 'none';
+        themeToggleBtn.title = 'Switch to light theme';
+    }
 }
